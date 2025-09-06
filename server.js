@@ -4,7 +4,7 @@ const fs = require('fs');
 const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 5000;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://your-frontend-service.onrender.com';
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://your-node-service.onrender.com';
 
 // Queue system for Discord operations
 const discordQueue = [];
@@ -67,13 +67,13 @@ async function sendToDiscordChannel(postData) {
     const channelId = CATEGORY_CHANNELS[tag];
     
     if (!channelId) {
-        console.log(`No Discord channel configured for category: ${tag}`);
+        console.error(`❌ No Discord channel configured for category: ${tag}`);
         return false;
     }
 
     const discordToken = process.env.DISCORD_TOKEN;
     if (!discordToken) {
-        console.error('Discord token not available');
+        console.error('❌ DISCORD_TOKEN environment variable is not set');
         return false;
     }
 
@@ -86,6 +86,7 @@ async function sendToDiscordChannel(postData) {
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
+            console.log(`Attempting to send post to Discord channel ${channelId} (attempt ${attempt}/${maxRetries})`);
             const response = await axios.post(
                 `https://discord.com/api/v10/channels/${channelId}/messages`,
                 { content: messageContent },
@@ -97,17 +98,22 @@ async function sendToDiscordChannel(postData) {
                     timeout: 10000
                 }
             );
-            console.log(`✅ Post sent to Discord channel #${tag}: [${tag}] ${topic}`);
+            console.log(`✅ Successfully sent post to Discord channel #${tag}: [${tag}] ${topic || description}`);
             return true;
         } catch (error) {
+            const errorDetails = error.response?.data || error.message;
+            console.error(`❌ Failed to send to Discord (attempt ${attempt}/${maxRetries}):`, errorDetails);
             if (error.response?.status === 429 && attempt < maxRetries) {
                 const retryAfter = (error.response.data.retry_after * 1000) || 1000;
-                console.log(`Rate limited, retrying after ${retryAfter}ms (attempt ${attempt}/${maxRetries})`);
+                console.log(`Rate limited, retrying after ${retryAfter}ms`);
                 await new Promise(resolve => setTimeout(resolve, retryAfter));
                 continue;
             }
-            console.error(`❌ Failed to send to Discord (attempt ${attempt}/${maxRetries}):`, 
-                error.response?.data || error.message);
+            if (error.response?.status === 401) {
+                console.error('❌ Invalid DISCORD_TOKEN');
+            } else if (error.response?.status === 403) {
+                console.error(`❌ Bot lacks permissions to send messages to channel ${channelId}`);
+            }
             return false;
         }
     }
@@ -117,6 +123,7 @@ async function sendToDiscordChannel(postData) {
 // Queue processing function
 async function processDiscordQueue() {
     if (isProcessingQueue || discordQueue.length === 0) {
+        console.log(`Queue processing skipped: isProcessing=${isProcessingQueue}, queueLength=${discordQueue.length}`);
         return;
     }
 
@@ -125,8 +132,12 @@ async function processDiscordQueue() {
 
     while (discordQueue.length > 0) {
         const postData = discordQueue.shift();
+        console.log(`Processing queue item: [${postData.tag}] ${postData.topic || postData.description}`);
         try {
-            await sendToDiscordChannel(postData);
+            const success = await sendToDiscordChannel(postData);
+            if (!success) {
+                console.error(`Failed to send post to Discord: [${postData.tag}] ${postData.topic || postData.description}`);
+            }
             // Add delay to avoid rate limits
             await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
@@ -140,14 +151,17 @@ async function processDiscordQueue() {
 
 // API Routes
 app.get('/api/messages', (req, res) => {
+    console.log(`GET /api/messages: Returning ${messages.length} messages`);
     res.json(messages);
 });
 
 app.post('/api/upload', async (req, res) => {
     try {
         const { topic, description, message, link, tag, source } = req.body;
-        
+        console.log('POST /api/upload received:', { topic, description, message, link, tag, source });
+
         if (!tag || (!description && !message)) {
+            console.error('Invalid request: Tag and description/message are required');
             return res.status(400).json({ error: 'Tag and description/message are required' });
         }
 
@@ -179,6 +193,8 @@ app.post('/api/upload', async (req, res) => {
             console.log(`Adding website post to Discord queue: ${logMessage}`);
             discordQueue.push(newPost);
             setImmediate(() => processDiscordQueue());
+        } else {
+            console.log(`Skipping Discord queue for source: ${source}`);
         }
         
         res.json({ success: true, message: 'Post uploaded successfully' });
@@ -190,6 +206,7 @@ app.post('/api/upload', async (req, res) => {
 
 // Serve the main page
 app.get('/', (req, res) => {
+    console.log('Serving index.html');
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
@@ -197,10 +214,12 @@ app.get('/', (req, res) => {
 app.delete('/api/delete/:postId', async (req, res) => {
     try {
         const postId = req.params.postId;
+        console.log(`DELETE /api/delete/${postId} requested`);
         
         const postToDelete = messages.find(post => post.id == postId);
         
         if (!postToDelete) {
+            console.error(`Post not found: ${postId}`);
             return res.status(404).json({ error: 'Post not found' });
         }
 
@@ -217,6 +236,7 @@ app.delete('/api/delete/:postId', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
+    console.log('Health check requested');
     res.json({ status: 'OK', messages: messages.length });
 });
 
