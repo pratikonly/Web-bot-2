@@ -4,7 +4,7 @@ const fs = require('fs');
 const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 5000;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://your-node-service.onrender.com';
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://web-bot-2-2p30.onrender.com/';
 
 // Queue system for Discord operations
 const discordQueue = [];
